@@ -1,0 +1,9 @@
+## create the PyTorch environment
+conda create --name mphy0041-pt -c pytorch numpy matplotlib requests pytorch
+
+## install Jupyter Notebook
+conda activate mphy0041-pt # enter mphy0041-pt environment
+conda install -c conda-forge notebook
+
+## Install PyTorch in with GPU
+conda install pytorch cudatoolkit=10.2 -c pytorch
