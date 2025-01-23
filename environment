@@ -7,3 +7,34 @@ conda install -c conda-forge notebook
 
 ## Install PyTorch in with GPU
 conda install pytorch cudatoolkit=10.2 -c pytorch
+
+## Install Docker
+## Verify that Docker was installed successfully
+docker --version
+
+## Pulling the given image from Docker Hub
+docker pull yipenghu/ucl-module-ubuntu:minimal
+
+## Verify the Docker images
+docker images
+
+## Run a Docker Container
+docker run --name mphy0041 -it yipenghu/ucl-module-ubuntu:minimal bash
+
+## Verification in the Docker Container
+conda --version
+git --version
+
+## Manual cloning of code repositories
+mkdir -p /workspace
+git clone https://github.com/yipenghu/MPHY0041.git /workspace/MPHY0041
+
+## Check if the file exists
+ls /workspace/MPHY0041
+
+## Exit Container
+exit
+
+## Re-enter the container
+docker start -ai mphy0041
+
