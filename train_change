@@ -1,0 +1,121 @@
+import random
+import os
+
+import torch
+import numpy as np
+
+import pt_utils as utils
+from utils import get_image_arrays
+
+# 设置 GPU
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+use_cuda = torch.cuda.is_available()
+RESULT_PATH = 'result'
+
+## 读取数据
+images, test_images, test_indices = get_image_arrays()
+image_size = (images.shape[1], images.shape[2])
+num_data = images.shape[0]
+
+## 训练参数
+weight_regulariser = 0.1  # 增加正则化权重，让形变更平滑
+minibatch_size = 16
+learning_rate = 1e-3
+total_iterations = int(5e4 + 1)
+freq_info_print = 500
+freq_test_save = 5000
+
+## 网络
+reg_net = torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
+    in_channels=2, out_channels=32, init_features=32, pretrained=False)
+reg_net = torch.nn.Sequential(reg_net, torch.nn.Conv2d(32, 2, 1, bias=True))  # 额外添加 1x1 卷积层
+if use_cuda:
+    reg_net.cuda()
+
+## 定义优化器
+optimizer = torch.optim.Adam(reg_net.parameters(), lr=learning_rate)
+num_minibatch = int(num_data / minibatch_size / 2)
+train_indices = list(range(num_data))
+reference_grids = utils.get_reference_grid(image_size)
+
+# **修正 reference_grids 维度**
+if reference_grids.shape[0] == 2:  # 目前是 [2, H, W]
+    zeros_channel = torch.zeros_like(reference_grids[:1, :, :])  # 创建全 0 的第三个通道
+    reference_grids = torch.cat((reference_grids, zeros_channel), dim=0)  # 变成 [3, H, W]
+
+if use_cuda:
+    reference_grids = reference_grids.cuda()
+
+## 计算 NCC 损失
+def normalized_cross_correlation(i1, i2):
+    i1_mean = torch.mean(i1, dim=(1, 2), keepdim=True)
+    i2_mean = torch.mean(i2, dim=(1, 2), keepdim=True)
+    i1_std = torch.std(i1, dim=(1, 2), keepdim=True)
+    i2_std = torch.std(i2, dim=(1, 2), keepdim=True)
+    
+    ncc = torch.mean((i1 - i1_mean) * (i2 - i2_mean) / (i1_std * i2_std), dim=(1, 2))
+    return -torch.mean(ncc)  # 取负数，NCC 越高越好
+
+## 训练循环
+for step in range(total_iterations):
+    if step % num_minibatch == 0:
+        random.shuffle(train_indices)
+
+    minibatch_idx = step % num_minibatch
+    indices_moving = train_indices[minibatch_idx * minibatch_size:(minibatch_idx + 1) * minibatch_size]
+    indices_fixed = train_indices[::-1][minibatch_idx * minibatch_size:(minibatch_idx + 1) * minibatch_size]
+
+    moving_images = torch.tensor(images[indices_moving, ...])
+    fixed_images = torch.tensor(images[indices_fixed, ...])
+    if use_cuda:
+        moving_images, fixed_images = moving_images.cuda(), fixed_images.cuda()
+
+    optimizer.zero_grad()
+    ddfs = reg_net(torch.stack((moving_images, fixed_images), dim=1))
+    pre_images = utils.warp_images(moving_images, ddfs, reference_grids)
+
+    ## **修改损失函数**
+    loss_sim_train = normalized_cross_correlation(pre_images, fixed_images)  # 使用 NCC
+    loss_reg_train = torch.mean(utils.gradient_norm(ddfs))  # 形变场正则化
+
+    loss_train = loss_sim_train + loss_reg_train * weight_regulariser
+    loss_train.backward()
+    optimizer.step()
+
+    ## **打印训练信息**
+    if step % freq_info_print == 0:
+        print(f"Step {step}: Loss={loss_train:.6f} (NCC={-loss_sim_train:.6f}, Regulariser={loss_reg_train:.6f})")
+        print(f"  Moving-fixed image pair indices: {indices_moving} - {indices_fixed}")
+
+    ## **测试阶段（修正维度错误）**
+    if step % freq_test_save == 0:
+        moving_images_test = torch.tensor(test_images[test_indices[0][0], ...]).unsqueeze(0).unsqueeze(0).float()
+        fixed_images_test = torch.tensor(test_images[test_indices[1][0], ...]).unsqueeze(0).unsqueeze(0).float()
+
+        if use_cuda:
+            moving_images_test, fixed_images_test = moving_images_test.cuda(), fixed_images_test.cuda()
+
+        # **确保输入形状为 [1, 2, H, W]**
+        test_input = torch.cat((moving_images_test, fixed_images_test), dim=1)  # [1, 2, H, W]
+
+        # 计算形变场
+        with torch.no_grad():
+            ddfs_test = reg_net(test_input)  # 传入 [1, 2, H, W] 形状
+
+        pre_images_test = utils.warp_images(moving_images_test, ddfs_test, reference_grids)
+
+        # 计算损失
+        loss_sim_test = normalized_cross_correlation(pre_images_test, fixed_images_test)
+        loss_reg_test = torch.mean(utils.gradient_norm(ddfs_test))
+        loss_test = loss_sim_test + loss_reg_test * weight_regulariser
+
+        print(f"*** Test *** Step {step}: Loss={loss_test:.6f} (NCC={-loss_sim_test:.6f}, Regulariser={loss_reg_test:.6f})")
+        
+        # 保存测试结果
+        filepath_to_save = os.path.join(RESULT_PATH, f"test_step{step:06d}-pt.npy")
+        np.save(filepath_to_save, pre_images_test.detach().cpu().numpy())
+        print(f"Test data saved: {filepath_to_save}")
+
+## **保存训练好的模型**
+torch.save(reg_net.state_dict(), os.path.join(RESULT_PATH, 'saved_model.pth'))  # 只保存参数
+print('Model saved.')
