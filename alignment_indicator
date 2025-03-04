@@ -1,0 +1,23 @@
+from skimage.metrics import structural_similarity as ssim
+from scipy.spatial.distance import dice
+import torch.nn.functional as F
+
+# 计算均方误差 (MSE)
+mse_value = np.mean((fixed_image - registered_image) ** 2)
+
+# 计算结构相似性 (SSIM)
+ssim_value = ssim(fixed_image, registered_image, data_range=1.0)
+
+# 计算 Dice 系数（ROI 计算时可用）
+fixed_image_bin = (fixed_image > 0.5).astype(np.uint8)  # 二值化
+registered_image_bin = (registered_image > 0.5).astype(np.uint8)
+dice_value = 1 - dice(fixed_image_bin.flatten(), registered_image_bin.flatten())
+
+# 打印评估结果
+print(f"MSE: {mse_value:.4f}")
+print(f"SSIM: {ssim_value:.4f}")
+print(f"Dice Coefficient: {dice_value:.4f}")
+
+## MSE 越小越好（说明误差越小）。
+## SSIM 越接近 1 越好（说明结构更相似）。
+## Dice 系数越接近 1 越好（ROI 之间重叠更好）qing
