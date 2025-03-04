@@ -1,0 +1,19 @@
+import torch
+
+# 计算形变场
+reg_net = torch.load(os.path.join(RESULT_PATH, 'saved_model_pt'))  # 加载训练好的模型
+moving_tensor = torch.tensor(moving_image).unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
+fixed_tensor = torch.tensor(fixed_image).unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
+ddf = reg_net(torch.cat((moving_tensor, fixed_tensor), dim=1)).squeeze().detach().cpu().numpy()  # [2, H, W]
+
+# 可视化形变场
+fig, ax = plt.subplots(1, 2, figsize=(12, 5))
+ax[0].imshow(ddf[0], cmap='jet')
+ax[0].set_title("Deformation Field Δx")
+ax[0].axis("off")
+
+ax[1].imshow(ddf[1], cmap='jet')
+ax[1].set_title("Deformation Field Δy")
+ax[1].axis("off")
+
+plt.show()
