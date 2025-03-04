@@ -1,4 +1,5 @@
 # This is part of the tutorial materials in the UCL Module MPHY0041: Machine Learning in Medical Imaging
+# windows运行不成功，修改了兼容 Windows 的 multiprocessingy以及num_workers=0
 import os
 import random
 import torch
