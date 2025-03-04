@@ -1,0 +1,34 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+
+# 结果文件路径
+RESULT_PATH = 'result'
+latest_step = 5000  # 你可以修改为最新的步数
+
+# 读取 .npy 结果文件
+test_result_file = os.path.join(RESULT_PATH, f"test_step{latest_step:06d}-pt.npy")
+pre_images_test = np.load(test_result_file)
+
+# 读取原始测试数据
+from utils import get_image_arrays
+_, test_images, test_indices = get_image_arrays()
+moving_image = test_images[test_indices[0], ...]  # 原始移动图像
+fixed_image = test_images[test_indices[1], ...]   # 固定图像
+registered_image = pre_images_test[0]  # 变形后的图像
+
+# 画图对比
+fig, ax = plt.subplots(1, 3, figsize=(15, 5))
+ax[0].imshow(moving_image, cmap='gray')
+ax[0].set_title("Moving Image")
+ax[0].axis("off")
+
+ax[1].imshow(fixed_image, cmap='gray')
+ax[1].set_title("Fixed Image")
+ax[1].axis("off")
+
+ax[2].imshow(registered_image, cmap='gray')
+ax[2].set_title("Registered Image")
+ax[2].axis("off")
+
+plt.show()
