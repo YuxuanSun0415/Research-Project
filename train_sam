@@ -1,0 +1,118 @@
+import random
+import os
+import torch
+import numpy as np
+
+import pt_utils as utils
+from utils import get_image_arrays
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+use_cuda = torch.cuda.is_available()
+RESULT_PATH = "result"
+
+# 读取数据
+images, test_images, test_indices = get_image_arrays()
+image_size = (images.shape[1], images.shape[2])
+num_data = images.shape[0]
+
+# 训练参数
+weight_regulariser = 0.01
+minibatch_size = 16
+learning_rate = 1e-3
+total_iterations = int(5e4 + 1)
+freq_info_print = 500
+freq_test_save = 5000
+
+# 直接在 pt_train.py 里定义 SAMReg 类
+class SAMReg(torch.nn.Module):
+    def __init__(self):
+        super(SAMReg, self).__init__()
+        # 这里我们用一个简单的 CNN 作为示例，你可以换成更复杂的网络
+        self.conv1 = torch.nn.Conv2d(2, 32, kernel_size=3, padding=1)
+        self.conv2 = torch.nn.Conv2d(32, 2, kernel_size=3, padding=1)
+
+    def forward(self, fixed_image, moving_image):
+        # 确保图像是单通道的
+        if fixed_image.shape[1] != 1:
+            fixed_image = fixed_image[:, 0:1, :, :]
+            moving_image = moving_image[:, 0:1, :, :]
+        
+        x = torch.cat((fixed_image, moving_image), dim=1)  # (batch, 2, H, W)
+        x = torch.relu(self.conv1(x))
+        ddf = self.conv2(x)  # 形变场
+        return ddf
+
+    def register(self, fixed_image, moving_image):
+        ddf = self.forward(fixed_image, moving_image)
+        registered_image = utils.warp_images(moving_image, ddf, reference_grids)
+        return registered_image, ddf
+
+# 初始化 SAMReg
+samreg_model = SAMReg()
+if use_cuda:
+    samreg_model.cuda()
+
+# 优化器
+optimizer = torch.optim.Adam(samreg_model.parameters(), lr=learning_rate)
+num_minibatch = int(num_data / minibatch_size / 2)
+train_indices = [i for i in range(num_data)]
+reference_grids = utils.get_reference_grid(image_size)
+if use_cuda:
+    reference_grids = reference_grids.cuda()
+
+# 训练循环
+for step in range(total_iterations):
+    if step % num_minibatch == 0:
+        random.shuffle(train_indices)
+
+    minibatch_idx = step % num_minibatch
+    indices_moving = train_indices[minibatch_idx * minibatch_size : (minibatch_idx + 1) * minibatch_size]
+    indices_fixed = train_indices[::-1][minibatch_idx * minibatch_size : (minibatch_idx + 1) * minibatch_size]
+
+    moving_images = torch.tensor(images[indices_moving, ...]).unsqueeze(1)  # 变成 (batch_size, 1, height, width)
+    fixed_images = torch.tensor(images[indices_fixed, ...]).unsqueeze(1)    # 变成 (batch_size, 1, height, width)
+    
+    if use_cuda:
+        moving_images, fixed_images = moving_images.cuda(), fixed_images.cuda()
+
+    optimizer.zero_grad()
+    
+    # 直接使用 SAMReg 进行配准
+    registered_images, ddfs = samreg_model.register(fixed_images, moving_images)
+
+    # 计算损失
+    loss_sim_train = torch.mean(utils.square_difference(registered_images, fixed_images))
+    loss_reg_train = torch.mean(utils.gradient_norm(ddfs))
+    loss_train = loss_sim_train + loss_reg_train * weight_regulariser
+
+    loss_train.backward()
+    optimizer.step()
+
+    # 记录损失
+    if step % freq_info_print == 0:
+        print(f"Step {step}: Loss={loss_train:.6f} (similarity={loss_sim_train:.6f}, regulariser={loss_reg_train:.6f})")
+        print(f"  Moving-fixed image pair indices: {indices_moving} - {indices_fixed}")
+
+    # 进行测试
+    if step % freq_test_save == 0:
+        moving_images_test = torch.tensor(test_images[test_indices[0], ...]).unsqueeze(1)
+        fixed_images_test = torch.tensor(test_images[test_indices[1], ...]).unsqueeze(1)
+        
+        if use_cuda:
+            moving_images_test, fixed_images_test = moving_images_test.cuda(), fixed_images_test.cuda()
+
+        registered_images_test, ddfs_test = samreg_model.register(fixed_images_test, moving_images_test)
+        loss_sim_test = torch.mean(utils.square_difference(registered_images_test, fixed_images_test))
+        loss_reg_test = torch.mean(utils.gradient_norm(ddfs_test))
+        loss_test = loss_sim_test + loss_reg_test * weight_regulariser
+
+        print(f"*** Test *** Step {step}: Loss={loss_test:.6f} (similarity={loss_sim_test:.6f}, regulariser={loss_reg_test:.6f})")
+        filepath_to_save = os.path.join(RESULT_PATH, f"test_step{step:06d}-pt.npy")
+        np.save(filepath_to_save, registered_images_test.detach().cpu().numpy())
+        print(f"Test data saved: {filepath_to_save}")
+
+print("Training done.")
+
+# 保存模型
+torch.save(samreg_model, os.path.join(RESULT_PATH, "saved_model_samreg_pt"))
+print("Model saved.")
